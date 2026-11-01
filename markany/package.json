@@ -1,0 +1,36 @@
+{
+  "name": "mcp-markany",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MarkAny watermark MCP server (Cloudflare Worker, Streamable HTTP)",
+  "scripts": {
+    "dev": "wrangler dev --local --port 43201",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test",
+    "types": "wrangler types",
+    "deploy": "wrangler deploy",
+    "deploy:dry": "wrangler deploy --dry-run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "@modelcontextprotocol/server": "2.4.0",
+    "agents": "0.32.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "^1.4.11",
+    "@types/node": "^26.6.6",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.0",
+    "wrangler": "^4.50.0"
+  },
+  "overrides": {
+    "workerd": "1.20261101.1"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

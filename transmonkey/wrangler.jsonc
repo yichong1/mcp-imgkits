@@ -1,0 +1,44 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mcp-transmonkey",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Grey release is workers.dev only. Do NOT add a routes/custom_domain block
+  // here. Any production hostname needs CTO / 小助理 approval first.
+  "workers_dev": true,
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "vars": {
+    // Grey-release self-test: allows workers.dev calls without X-Access-Channel.
+    // Set to "0" once mcp-credit-gateway is wired to this Worker.
+    "ALLOW_DIRECT_MCP": "1",
+    "TRANSLATE_TEXT_BASE_URL": "https://a2.imgkits.com",
+    "DOC_TRANSLATE_BASE_URL": "https://api.imgkits.com",
+    "IMAGE_TRANSLATE_BASE_URL": "https://ai.imgkits.com",
+    "UPSTREAM_TIMEOUT_MS": "30000",
+    "JOB_POLL_INTERVAL_MS": "2000",
+    "COST_TRANSLATE_TEXT": "1",
+    "COST_TRANSLATE_DOCUMENT": "5",
+    "COST_TRANSLATE_IMAGE": "2",
+    "COST_TRANSLATE_SUBTITLE": "3",
+    "COST_DETECT_LANGUAGE": "0"
+  },
+  // Names only. Values are set with `wrangler secret put` (or .dev.vars locally).
+  // GATEWAY_SHARED_SECRET is optional: set it here only when you also set the
+  // matching header on the gateway side.
+  "secrets": {
+    "required": ["UPSTREAM_API_TOKEN"]
+  }
+}

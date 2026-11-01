@@ -1,0 +1,48 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mcp-markany",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Grey release is workers.dev only. Do NOT add a routes/custom_domain block
+  // here. Any production hostname needs CTO / 小助理 approval first.
+  "workers_dev": true,
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "vars": {
+    // Grey-release self-test: allows workers.dev calls without X-Access-Channel.
+    // Set to "0" once mcp-credit-gateway is wired to this Worker.
+    "ALLOW_DIRECT_MCP": "1",
+    "AI_BASE_URL": "https://ai.imgkits.com",
+    // Documented placeholder until the single modern REST path is signed off.
+    "ADD_WATERMARK_PATH": "/api/watermark",
+    "REMOVE_WATERMARK_PATH": "/api/inpaint",
+    "BLIND_ENCODE_PATH": "/index.php?r=ai/encode-blind-watermark",
+    "BLIND_DECODE_PATH": "/index.php?r=ai/decode-blind-watermark",
+    "BLIND_RESULT_PATH": "/index.php?r=ai/get-decode-blind-watermark",
+    "INPAINT_BUCKET": "imgkits",
+    "UPSTREAM_TIMEOUT_MS": "30000",
+    "JOB_POLL_INTERVAL_MS": "2000",
+    "COST_ADD_WATERMARK": "2",
+    "COST_REMOVE_WATERMARK": "3",
+    "COST_EMBED_BLIND_WATERMARK": "2",
+    "COST_DECODE_BLIND_WATERMARK": "2"
+  },
+  // Names only. Values are set with `wrangler secret put` (or .dev.vars locally).
+  // GATEWAY_SHARED_SECRET and BLIND_WATERMARK_KEY are optional: set them only
+  // when you also configure the matching side (gateway header / server default).
+  "secrets": {
+    "required": ["UPSTREAM_API_TOKEN"]
+  }
+}
