@@ -1,0 +1,19 @@
+# Copy to .dev.vars for `wrangler dev`. Never commit .dev.vars.
+# TICKET_ENCRYPTION_KEY must decode to exactly 32 bytes (AES-256-GCM).
+#   openssl rand -base64 32
+# ADMIN_TOKEN is the 小助理 header X-Admin-Token. Use a long random value.
+#   openssl rand -base64 32
+# Do not reuse either value in any frontend, usa repo, or other Worker.
+TICKET_ENCRYPTION_KEY="replace-with-openssl-rand-base64-32"
+ADMIN_TOKEN="replace-with-long-random-token"
+# MINERU_S2S_BEARER is a separately issued server-to-server Bearer for this
+# MCP server. Do not reuse a frontend key, a proxy token, or any old gateway key.
+MINERU_S2S_BEARER="replace-with-separately-issued-s2s-bearer"
+# Optional mount hooks. When set (no trailing slash, no /mcp suffix), /mcp
+# aggregates tools from POST {upstream}/mcp. Leave unset to expose only the
+# three local document tools; each upstream mount is independent.
+# MCP_TRANSMONKEY_UPSTREAM="https://mcp-transmonkey.409198933.workers.dev"
+# MCP_MARKANY_UPSTREAM="https://mcp-markany.409198933.workers.dev"
+# Optional shared secret forwarded to the upstream as X-Gateway-Shared-Secret.
+# Leave unset when the upstream does not require it.
+# GATEWAY_SHARED_SECRET="replace-with-upstream-shared-secret"

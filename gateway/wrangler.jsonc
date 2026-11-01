@@ -1,0 +1,78 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mcp-credit-gateway",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "mcp.imgkits.com",
+      "custom_domain": true
+    }
+  ],
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  // Low-volume billing gateway. 100% logs/traces so the first live usa check is visible.
+  // Lower head_sampling_rate if traffic grows. Logs must stay prefix-only (see README).
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "vars": {
+    "USA_BASE_URL": "https://usa.imgkits.com",
+    "USA_TIMEOUT_MS": "5000",
+    // Public, non-secret constant for the MCP tools.
+    "MINERU_BASE_URL": "https://api.imgkits.com/api/mineru",
+    // Mount hook: when set, /mcp aggregates TransMonkey tools at POST {upstream}/mcp.
+    "MCP_TRANSMONKEY_UPSTREAM": "https://mcp-transmonkey.409198933.workers.dev",
+    // Mount hook: when set, /mcp also aggregates MarkAny tools at POST {upstream}/mcp.
+    "MCP_MARKANY_UPSTREAM": "https://mcp-markany.409198933.workers.dev"
+  },
+  // Names only. Values are set with `wrangler secret put` and local `.dev.vars`.
+  // GATEWAY_SHARED_SECRET is optional and intentionally not in `required`.
+  "secrets": {
+    "required": ["TICKET_ENCRYPTION_KEY", "ADMIN_TOKEN", "MINERU_S2S_BEARER"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "mcp-credit-gateway",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "KEY_CACHE",
+      "id": "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+    }
+  ],
+  // Same-account Worker-to-Worker (workers.dev public URL hits CF 1042).
+  "services": [
+    {
+      "binding": "TRANSMONKEY_MCP",
+      "service": "mcp-transmonkey"
+    },
+    {
+      "binding": "MARKANY_MCP",
+      "service": "mcp-markany"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "USER_LOCK", "class_name": "UserLock" }]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["UserLock"]
+    }
+  ]
+}

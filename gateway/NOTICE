@@ -1,0 +1,13 @@
+Third-party notice
+==================
+
+This product is powered by MinerU (opendatalab/MinerU).
+
+  Powered by MinerU (opendatalab/MinerU)
+  Project: https://github.com/opendatalab/MinerU
+  License: https://github.com/opendatalab/MinerU/blob/master/LICENSE.md
+
+MinerU 4.x uses the MinerU Open Source License (Apache-2.0 plus additional
+terms). Upstream model weights and third-party components may carry separate
+licenses. This repository does not bundle MinerU source code, model weights,
+or other upstream assets; it calls a separately operated MinerU service.
