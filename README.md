@@ -1,16 +1,16 @@
 # mcp-imgkits
 
-Public monorepo for ImgKits MCP Workers.
+Public monorepo for ImgKits MCP Workers. The production server is Streamable HTTP and aggregates translation, blind watermark embed and decode, photo colorize, audio tools, PDF→Markdown→translate, and text utilities. The same endpoint also serves document OCR already mounted on the gateway (`convert_to_markdown`, `ocr_image`, `extract_tables`).
 
 | Path | Role |
 |------|------|
-| [`transmonkey/`](./transmonkey/) | Translation MCP (text / document / image / subtitle + language detect) |
-| [`markany/`](./markany/) | Watermark MCP (add / remove / blind embed & decode) |
-| [`imgkits-core/`](./imgkits-core/) | Core image MCP (colorize, upscale with face enhance, background, cartoon, extend, resize, compress) |
-| [`gateway/`](./gateway/) | Credit gateway (auth, metering, Service Binding aggregation) |
-| [`audio/`](./audio/) | Audio MCP (stems / whisper / TTS / clone / tangoflux; extract_html deferred) |
-| [`doc-translate/`](./doc-translate/) | PDF→MD→translate combo (`pdf_to_markdown_then_translate`) |
-| [`text-utils/`](./text-utils/) | pure text style/count tools (`convert_text_style`, `count_text`) |
+| [`transmonkey/`](./transmonkey/) | Translation (text / document / image / subtitle + language detect) |
+| [`markany/`](./markany/) | Blind watermark embed and decode (`embed_blind_watermark`, `decode_blind_watermark`) |
+| [`imgkits-core/`](./imgkits-core/) | Photo colorize (`colorize_photo`) |
+| [`audio/`](./audio/) | Audio tools (stem separation, text-to-speech, voice clone, sound effects) |
+| [`doc-translate/`](./doc-translate/) | PDF→Markdown→translate (`pdf_to_markdown_then_translate`) |
+| [`text-utils/`](./text-utils/) | `convert_text_style`, `count_text` |
+| [`gateway/`](./gateway/) | Credit gateway (auth, metering, aggregation) |
 
 ## Use the MCP
 
@@ -20,12 +20,9 @@ Public monorepo for ImgKits MCP Workers.
 
 `initialize` / `tools/list` / `ping` are public; `tools/call` requires `Authorization: Bearer sk_live_…` issued by the gateway.
 
-## Copyright note (MarkAny)
-
-`remove_watermark` is for material you own or are licensed to edit. Callers must pass `confirm_authorization=true`; each caller key is rate-limited (default 5 calls / 60 seconds). See [`markany/README.md`](./markany/README.md) for the full copyright / abuse gate.
-
 ## Layout notes
 
 - Business product repos are **not** modified here.
 - Secrets (`UPSTREAM_API_TOKEN`, etc.) stay in Cloudflare Worker secrets — never commit `.dev.vars` or real keys.
 - Grey-release Workers may still appear on `workers.dev`; production entry is the gateway domain above.
+- License: MIT (`LICENSE`).
