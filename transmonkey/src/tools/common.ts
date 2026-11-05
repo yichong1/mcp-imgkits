@@ -1,7 +1,7 @@
 import { chargeCredits, type ChargeSuccess } from "../charge";
 import { costFor, type BillableTool } from "../config";
 import type { ToolContext } from "../env";
-import { ToolError, withChargeContext } from "../errors";
+import { rethrowWithCharge, ToolError } from "../errors";
 import { normalizeLanguageCode } from "../languages";
 
 export interface BilledCall {
@@ -89,7 +89,7 @@ export async function pseudoUpstreamUserId(authToken: string, idempotencyKey: st
  */
 export function raiseAfterCharge(error: unknown, billed: BilledCall): never {
   if (billed.charge.charged > 0) {
-    throw withChargeContext(error, billed.charge.charge_id ?? billed.idempotencyKey);
+    rethrowWithCharge(error, billed.charge.charge_id ?? billed.idempotencyKey);
   }
   throw error;
 }

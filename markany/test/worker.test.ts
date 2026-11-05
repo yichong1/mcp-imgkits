@@ -88,7 +88,7 @@ describe("Worker entry", () => {
     expect((body.gateway as Record<string, unknown>).required_channel).toBe("mcp-gateway");
     expect((body.gateway as Record<string, unknown>).shared_secret_configured).toBe(false);
 
-    const tools = body.tools as Record<string, { cost: number; type: string }>;
+    const tools = body.tools as Record<string, Record<string, unknown>>;
     expect(Object.keys(tools).sort()).toEqual([
       "add_watermark",
       "decode_blind_watermark",
@@ -96,7 +96,13 @@ describe("Worker entry", () => {
       "remove_watermark",
     ]);
     expect(tools.add_watermark).toEqual({ cost: 2, type: "sync" });
-    expect(tools.remove_watermark).toEqual({ cost: 3, type: "sync" });
+    expect(tools.remove_watermark).toEqual({
+      cost: 3,
+      type: "sync",
+      confirm_authorization: "required",
+      rate_limit: 5,
+      rate_window_ms: 60_000,
+    });
     expect(tools.embed_blind_watermark).toEqual({ cost: 2, type: "sync" });
     expect(tools.decode_blind_watermark).toEqual({ cost: 2, type: "async" });
     expect(JSON.stringify(body)).not.toContain("test-upstream-token");

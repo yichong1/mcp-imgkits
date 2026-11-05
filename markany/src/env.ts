@@ -38,6 +38,13 @@ export interface Env {
   COST_REMOVE_WATERMARK?: string;
   COST_EMBED_BLIND_WATERMARK?: string;
   COST_DECODE_BLIND_WATERMARK?: string;
+
+  /**
+   * Optional override for the remove_watermark sliding window.
+   * Unset uses 5 calls per 60_000 ms. These are not prices.
+   */
+  REMOVE_WATERMARK_RATE_LIMIT?: string;
+  REMOVE_WATERMARK_RATE_WINDOW_MS?: string;
 }
 
 /** Per-request context handed to every tool implementation. */

@@ -6,6 +6,8 @@ import {
   SERVICE_VERSION,
   costFor,
   directMcpAllowed,
+  removeWatermarkRateLimit,
+  removeWatermarkRateWindowMs,
 } from "./config";
 import type { Env } from "./env";
 import { createMarkAnyServer } from "./server";
@@ -152,7 +154,13 @@ export default {
         },
         tools: {
           add_watermark: { cost: costFor(env, "add_watermark"), type: "sync" },
-          remove_watermark: { cost: costFor(env, "remove_watermark"), type: "sync" },
+          remove_watermark: {
+            cost: costFor(env, "remove_watermark"),
+            type: "sync",
+            confirm_authorization: "required",
+            rate_limit: removeWatermarkRateLimit(env),
+            rate_window_ms: removeWatermarkRateWindowMs(env),
+          },
           embed_blind_watermark: { cost: costFor(env, "embed_blind_watermark"), type: "sync" },
           decode_blind_watermark: { cost: costFor(env, "decode_blind_watermark"), type: "async" },
         },

@@ -1,6 +1,6 @@
 import { aiBaseUrl, jobPollIntervalMs, upstreamTimeoutMs } from "./config";
 import type { Env } from "./env";
-import { errorMessage, UpstreamError } from "./errors";
+import { errorMessage, mapUpstreamHttpStatus, redactSecrets, UpstreamError } from "./errors";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -38,7 +38,7 @@ function upstreamRemark(payload: unknown): string | undefined {
   if (!record) return undefined;
   for (const key of ["remark", "message", "msg", "error", "Message", "ErrMsg", "errmsg"]) {
     const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) return redactSecrets(value.trim());
   }
   return undefined;
 }
@@ -231,7 +231,7 @@ function upstreamHeaders(env: Env): Record<string, string> {
   };
 }
 
-async function readUpstreamJson(response: Response): Promise<unknown> {
+async function readUpstreamJson(response: Response, secrets: string[]): Promise<unknown> {
   if (response.status >= 300 && response.status < 400) {
     throw new UpstreamError(
       `Watermark upstream returned a redirect (HTTP ${response.status}); redirects are not followed.`,
@@ -241,6 +241,11 @@ async function readUpstreamJson(response: Response): Promise<unknown> {
   }
 
   const text = await response.text().catch(() => "");
+  if (!response.ok) {
+    // Ignore the body. Error pages and auth failures sometimes echo credentials.
+    throw mapUpstreamHttpStatus(response.status, "Watermark upstream");
+  }
+
   let payload: unknown;
   try {
     payload = text.trim() ? JSON.parse(text) : undefined;
@@ -251,18 +256,17 @@ async function readUpstreamJson(response: Response): Promise<unknown> {
       "invalid_upstream_response",
     );
   }
-
-  if (!response.ok) {
-    throw new UpstreamError(
-      `Watermark upstream returned HTTP ${response.status}: ${upstreamRemark(payload) ?? "unknown error"}.`,
-      response.status,
-      "upstream_http_error",
-    );
-  }
   if (payload === undefined) {
     throw new UpstreamError("Watermark upstream returned an empty body.", response.status, "invalid_upstream_response");
   }
-  return unwrapUpstream(payload);
+  try {
+    return unwrapUpstream(payload);
+  } catch (error) {
+    if (error instanceof UpstreamError) {
+      throw new UpstreamError(redactSecrets(error.message, secrets), error.status, error.code, error.details);
+    }
+    throw error;
+  }
 }
 
 export async function postUpstream(env: Env, baseUrl: string, path: string, body: unknown): Promise<unknown> {
@@ -280,12 +284,12 @@ export async function postUpstream(env: Env, baseUrl: string, path: string, body
     });
   } catch (error) {
     throw new UpstreamError(
-      `Watermark upstream request failed (${errorMessage(error)}).`,
+      `Watermark upstream request failed (${redactSecrets(errorMessage(error), [env.UPSTREAM_API_TOKEN])}).`,
       undefined,
       "upstream_unreachable",
     );
   }
-  return readUpstreamJson(response);
+  return readUpstreamJson(response, [requireUpstreamToken(env)]);
 }
 
 export async function getUpstream(env: Env, baseUrl: string, path: string): Promise<unknown> {
@@ -300,12 +304,12 @@ export async function getUpstream(env: Env, baseUrl: string, path: string): Prom
     });
   } catch (error) {
     throw new UpstreamError(
-      `Watermark upstream request failed (${errorMessage(error)}).`,
+      `Watermark upstream request failed (${redactSecrets(errorMessage(error), [env.UPSTREAM_API_TOKEN])}).`,
       undefined,
       "upstream_unreachable",
     );
   }
-  return readUpstreamJson(response);
+  return readUpstreamJson(response, [requireUpstreamToken(env)]);
 }
 
 /** POST to the single configured AI base URL. */

@@ -18,7 +18,7 @@ Public monorepo for ImgKits MCP Workers.
 
 ## Copyright note (MarkAny)
 
-`remove_watermark` is for material you own or are licensed to edit. See [`markany/README.md`](./markany/README.md) for the full copyright / abuse gate.
+`remove_watermark` is for material you own or are licensed to edit. Callers must pass `confirm_authorization=true`; each caller key is rate-limited (default 5 calls / 60 seconds). See [`markany/README.md`](./markany/README.md) for the full copyright / abuse gate.
 
 ## Layout notes
 

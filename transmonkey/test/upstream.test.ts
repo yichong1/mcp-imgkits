@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   chunkTextForUpstream,
+  docCost,
   extractJobId,
   extractTaskId,
   extractTranslations,
+  imageCreate,
   normalizeJobState,
+  postUpstream,
   translateTexts,
   unwrapUpstream,
 } from "../src/upstream";
@@ -147,5 +150,65 @@ describe("translateTexts", () => {
       translateTexts({ ...testEnv, UPSTREAM_API_TOKEN: "" }, { from: "en", to: "zh", texts: ["x"] }),
     ).rejects.toThrow(/UPSTREAM_API_TOKEN/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the legacy public paths and does not prefix /api", async () => {
+    const text = mockFetch(() => jsonResponse({ code: 0, data: { result: [{ index: 0, translated: "a" }] } }));
+    await translateTexts(testEnv, { from: "en", to: "zh", texts: ["a"] });
+    expect(new URL(text.calls[0].url).pathname).toBe("/translate/text");
+    expect(text.calls[0].url.startsWith("https://text.test/")).toBe(true);
+
+    const doc = mockFetch(() => jsonResponse({ code: 0, data: { taskId: "t" } }));
+    await docCost(testEnv, { doc: "https://cdn.test/a.pdf", from: "en", to: "zh", fileName: "a.pdf", userId: "u" });
+    expect(new URL(doc.calls[0].url).pathname).toBe("/doc-translate/cost");
+
+    const image = mockFetch(() => jsonResponse({ code: 0, data: { jobId: "j" } }));
+    await imageCreate(testEnv, {
+      imgs: ["https://cdn.test/a.png"],
+      from: "en",
+      to: "zh",
+      userId: "u",
+      font: "default",
+      paste: 1,
+    });
+    expect(new URL(image.calls[0].url).pathname).toBe("/img-translate/create");
+    expect(image.calls[0].url.includes("/api/img-translate")).toBe(false);
+  });
+});
+
+describe("upstream HTTP status mapping", () => {
+  it.each([
+    [401, "upstream_unauthorized"],
+    [403, "upstream_forbidden"],
+    [404, "upstream_not_found"],
+    [429, "upstream_rate_limited"],
+    [500, "upstream_unavailable"],
+    [502, "upstream_unavailable"],
+    [400, "upstream_http_error"],
+  ] as const)("maps HTTP %s to %s without leaking the token", async (status, code) => {
+    const { calls } = mockFetch(() =>
+      jsonResponse({ message: "Authorization: Bearer test-upstream-token" }, status),
+    );
+    let thrown: unknown;
+    try {
+      await postUpstream(testEnv, "https://text.test", "/translate/text", { contents: ["x"] });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code, status });
+    const blob = JSON.stringify(thrown);
+    expect(blob).not.toContain("test-upstream-token");
+    expect(blob).not.toMatch(/authorization/i);
+    expect(blob).not.toMatch(/bearer/i);
+    expect(calls).toHaveLength(1);
+    expect(new URL(calls[0].url).pathname).toBe("/translate/text");
+  });
+
+  it("still refuses a missing token with no request when the body would be an error", async () => {
+    const { calls } = mockFetch(() => jsonResponse({ message: "no" }, 401));
+    await expect(postUpstream({ ...testEnv, UPSTREAM_API_TOKEN: undefined }, "https://text.test", "/translate/text", {})).rejects.toMatchObject({
+      code: "upstream_not_configured",
+    });
+    expect(calls).toHaveLength(0);
   });
 });

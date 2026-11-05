@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   COPYRIGHT_NOTICE,
   DEFAULT_DECODE_WAIT_SECONDS,
+  removeWatermarkRateLimit,
+  removeWatermarkRateWindowMs,
   MAX_BLIND_WATERMARK_TEXT_CHARS,
   MAX_DECODE_WAIT_SECONDS,
   MAX_IMAGE_BYTES,
@@ -32,6 +34,8 @@ export function createMarkAnyServer(ctx: ToolContext): McpServer {
   const server = new McpServer({ name: SERVICE_NAME, version: SERVICE_VERSION });
   const addCost = costFor(ctx.env, "add_watermark");
   const removeCost = costFor(ctx.env, "remove_watermark");
+  const removeLimit = removeWatermarkRateLimit(ctx.env);
+  const removeWindowSeconds = Math.round(removeWatermarkRateWindowMs(ctx.env) / 1000);
   const embedCost = costFor(ctx.env, "embed_blind_watermark");
   const decodeCost = costFor(ctx.env, "decode_blind_watermark");
 
@@ -74,7 +78,11 @@ export function createMarkAnyServer(ctx: ToolContext): McpServer {
         `Optional \`mask_image_url\` (white = remove) or normalized \`mask_rect\` {x,y,width,height} in 0-1; ` +
         `with neither, the upstream auto-detect mode is used (support depends on the upstream). ` +
         `COPYRIGHT / ABUSE GATE: ${COPYRIGHT_NOTICE} ` +
-        `This tool is metered per call, accepts a single image per request, and returns an audit_id; ` +
+        `Pass confirm_authorization=true to confirm you own the image or are licensed to edit it; ` +
+        `omitted or false is rejected and no upstream request is made. ` +
+        `This Worker limits each caller key to ${removeLimit} confirmed calls per ${removeWindowSeconds} seconds ` +
+        `(tool error rate_limited, status 429). ` +
+        `This tool accepts a single image per request and returns an audit_id plus a copyright field; ` +
         `bulk/automated third-party stripping is prohibited and may be blocked or reported. ` +
         `Cost: ${costLabel(removeCost)} per call; mcp-credit-gateway charges before forwarding the request.`,
       inputSchema: removeWatermarkInputSchema,

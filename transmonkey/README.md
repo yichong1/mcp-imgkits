@@ -186,7 +186,7 @@ npm run dev
 测试覆盖：
 
 - `test/charge.test.ts`：本地 trust 助手、cost 元数据、`charge_id` 透传、0 cost、非法 cost、**无 fetch**。
-- `test/upstream.test.ts`：信封解包、文本结果映射、job status 10/-1/-2/0/1/2、长文本切分、`contents` 上限、`channel: ai`。
+- `test/upstream.test.ts`：信封解包、文本结果映射、job status 10/-1/-2/0/1/2、长文本切分、`contents` 上限、`channel: ai`、旧公开 path（无 `/api` 前缀）、401/403/404/429/5xx 映射且不回传 token。
 - `test/subtitle.test.ts`：SRT/VTT/ASS 解析与时间轴保留。
 - `test/languages.test.ts`：语言代码归一化与常见语种检测。
 - `test/tools.test.ts`：先记录 gateway charge 再上游、结果带 `charge_id`、job resume 不创建新任务、文档 cost→create→status、图片结果映射、字幕扣一次、无效字幕在请求前被拒、**全程无 `/v1/charge`**。
@@ -357,10 +357,12 @@ curl -sS -N -X POST "$BASE/mcp" \
 | code | 含义 |
 |---|---|
 | `invalid_arguments` / `invalid_language` / `text_too_long` / `subtitle_too_long` | 参数校验失败，未请求上游 |
-| `upstream_not_configured` | Worker 未设置 `UPSTREAM_API_TOKEN` |
-| `tool_failed_after_charge` | gateway 已扣（charged>0）但工具/上游失败；错误里带 `charge_id`，人工对账 |
+| `upstream_not_configured` | Worker 未设置 `UPSTREAM_API_TOKEN`。不打上游 |
+| `tool_failed_after_charge` | gateway 已扣（charged>0）但工具/上游业务失败；错误里带 `charge_id`，人工对账 |
 | `upstream_job_failed` | 异步 job 失败；若已扣分，错误里带 charge 信息 |
-| `upstream_rejected` / `invalid_upstream_response` / `upstream_unavailable` | 上游错误 |
+| `upstream_unauthorized` / `upstream_forbidden` / `upstream_not_found` / `upstream_rate_limited` | 上游 HTTP 401 / 403 / 404 / 429。固定文案，不回传响应体，不出现 Authorization 或 token |
+| `upstream_unavailable` | 上游 HTTP 5xx |
+| `upstream_rejected` / `invalid_upstream_response` / `upstream_http_error` | 其它上游错误。业务拒绝文案会去掉 Bearer / token |
 | `unauthorized` | `tools/call` 等需鉴权方法的 Bearer 缺失/前缀错、shared secret 不匹配，或未走 gateway 且直连被禁用（公开发现方法不会触发） |
 
 余额不足（402）、gateway 限流（429）、gateway 不可用（503）由 **gateway 在转发前**返回，不会进入本 Worker 的工具错误。

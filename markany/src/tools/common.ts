@@ -1,7 +1,7 @@
 import { chargeCredits, type ChargeSuccess } from "../charge";
 import { costFor, type BillableTool } from "../config";
 import type { ToolContext } from "../env";
-import { ToolError, withChargeContext } from "../errors";
+import { rethrowWithCharge, ToolError } from "../errors";
 
 export interface BilledCall {
   charge: ChargeSuccess;
@@ -64,7 +64,7 @@ export async function billTool(
  */
 export function raiseAfterCharge(error: unknown, billed: BilledCall): never {
   if (billed.charge.charged > 0) {
-    throw withChargeContext(error, billed.charge.charge_id ?? billed.idempotencyKey);
+    rethrowWithCharge(error, billed.charge.charge_id ?? billed.idempotencyKey);
   }
   throw error;
 }
