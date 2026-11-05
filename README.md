@@ -8,6 +8,9 @@ Public monorepo for ImgKits MCP Workers.
 | [`markany/`](./markany/) | Watermark MCP (add / remove / blind embed & decode) |
 | [`imgkits-core/`](./imgkits-core/) | Core image MCP (colorize, upscale with face enhance, background, cartoon, extend, resize, compress) |
 | [`gateway/`](./gateway/) | Credit gateway (auth, metering, Service Binding aggregation) |
+| [`audio/`](./audio/) | Audio MCP (stems / whisper / TTS / clone / tangoflux; extract_html deferred) |
+| [`doc-translate/`](./doc-translate/) | PDF→MD→translate combo (`pdf_to_markdown_then_translate`) |
+| [`text-utils/`](./text-utils/) | pure text style/count tools (`convert_text_style`, `count_text`) |
 
 ## Use the MCP
 

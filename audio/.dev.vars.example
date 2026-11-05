@@ -1,0 +1,7 @@
+# Copy to .dev.vars for local development. Never commit .dev.vars.
+# 路B server-to-server bearer (INTERNAL_SERVER_BEARER). Never reuse a frontend key.
+UPSTREAM_API_TOKEN=replace-with-internal-server-bearer
+
+# Optional. Only needed when the gateway is configured to send
+# X-Gateway-Shared-Secret. Leave unset for workers.dev self-test.
+# GATEWAY_SHARED_SECRET=replace-with-a-gateway-shared-secret

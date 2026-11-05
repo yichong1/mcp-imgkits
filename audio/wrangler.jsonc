@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mcp-audio",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Grey release is workers.dev only. Do NOT add a routes/custom_domain block.
+  "workers_dev": true,
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "vars": {
+    "ALLOW_DIRECT_MCP": "1",
+    "API_BASE_URL": "https://api.imgkits.com",
+    "TANGOFLUX_CREATE_PATH": "/api/tangoflux/create",
+    "TANGOFLUX_RESULT_PATH": "/api/tangoflux/result",
+    "SPLEETER_CREATE_PATH": "/api/spleeter/create",
+    "SPLEETER_STATUS_PATH": "/api/spleeter/status",
+    "SPLEETER_RESULT_PATH": "/api/spleeter/result",
+    "WHISPER_CREATE_PATH": "/api/faster-whisper/create",
+    "WHISPER_RESULT_PATH": "/api/faster-whisper/result",
+    "QWEN_TTS_CREATE_PATH": "/api/qwen-tts/create",
+    "QWEN_TTS_STATUS_PATH": "/api/qwen-tts/status",
+    "QWEN_TTS_RESULT_PATH": "/api/qwen-tts/result",
+    "UPSTREAM_ATTACH_AUTH": "1",
+    "UPSTREAM_TIMEOUT_MS": "30000",
+    "JOB_POLL_INTERVAL_MS": "4000",
+    "COST_TEXT_TO_SOUND_EFFECT": "2",
+    "COST_SEPARATE_STEMS": "3",
+    "COST_TRANSCRIBE_AUDIO": "2",
+    "COST_GENERATE_SUBTITLES": "2",
+    "COST_TEXT_TO_SPEECH": "2",
+    "COST_CLONE_VOICE_TTS": "3"
+  }
+  // UPSTREAM_API_TOKEN: wrangler secret put UPSTREAM_API_TOKEN (路B INTERNAL_SERVER_BEARER)
+}

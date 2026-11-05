@@ -1,0 +1,290 @@
+import { z } from "zod";
+import {
+  COPYRIGHT_NOTICE,
+  DEFAULT_WAIT_SECONDS,
+  FROM_APP,
+  MAX_AUDIO_URL_CHARS,
+  MAX_REFER_AUDIO_TEXT_CHARS,
+  MAX_TEXT_CHARS,
+  MAX_WAIT_SECONDS,
+  VOICE_CLONE_NOTICE,
+  qwenTtsCreatePath,
+  qwenTtsResultPath,
+} from "../config";
+import type { ToolContext } from "../env";
+import { ToolError, UpstreamError } from "../errors";
+import {
+  apiPost,
+  defaultPollInterval,
+  extractAudioUrl,
+  extractJobId,
+  normalizeAsyncJob,
+  pollJob,
+} from "../upstream";
+import {
+  auditRecord,
+  billTool,
+  newAuditId,
+  raiseAfterCharge,
+  requireUpstreamBearer,
+  resolveIdempotencyKey,
+  validateHttpUrl,
+  validateJobId,
+  waitMsFrom,
+} from "./common";
+
+export const cloneVoiceTtsInputSchema = z.object({
+  text: z
+    .string()
+    .min(1)
+    .max(MAX_TEXT_CHARS)
+    .optional()
+    .describe(
+      `Text to speak in the cloned voice (<= ${MAX_TEXT_CHARS} chars). Required to start; omit when polling with \`job_id\` only.`,
+    ),
+  clone_audio_url: z
+    .string()
+    .min(1)
+    .max(MAX_AUDIO_URL_CHARS)
+    .optional()
+    .describe(
+      `Public http(s) URL of the voice sample to clone (<= ${MAX_AUDIO_URL_CHARS} chars). ` +
+        "Must be YOUR own voice or a voice you have explicit written authorization to clone.",
+    ),
+  clone_audio_text: z
+    .string()
+    .min(1)
+    .max(MAX_REFER_AUDIO_TEXT_CHARS)
+    .optional()
+    .describe(
+      `Transcript of the clone sample (strongly recommended, <= ${MAX_REFER_AUDIO_TEXT_CHARS} chars).`,
+    ),
+  authorization_confirmed: z
+    .boolean()
+    .optional()
+    .describe(
+      "Must be true when starting a clone job: confirms the sample is your own voice or you have written authorization.",
+    ),
+  language: z
+    .string()
+    .min(1)
+    .max(32)
+    .optional()
+    .describe("Optional language hint (default Auto upstream)."),
+  speed: z
+    .number()
+    .min(0.5)
+    .max(2)
+    .optional()
+    .describe("Optional speaking speed (0.5–2)."),
+  job_id: z
+    .string()
+    .min(1)
+    .max(128)
+    .optional()
+    .describe("Existing Qwen-TTS job id. Polling never creates a new upstream job."),
+  wait_seconds: z
+    .number()
+    .min(0)
+    .max(MAX_WAIT_SECONDS)
+    .default(DEFAULT_WAIT_SECONDS)
+    .describe(
+      `How long to wait for a result, 0–${MAX_WAIT_SECONDS} seconds (default ${DEFAULT_WAIT_SECONDS}).`,
+    ),
+  idempotency_key: z
+    .string()
+    .min(1)
+    .max(120)
+    .optional()
+    .describe("Optional caller correlation key. Billing is handled by mcp-credit-gateway."),
+});
+
+export type CloneVoiceTtsInput = z.infer<typeof cloneVoiceTtsInputSchema>;
+
+function extractTtsAudioUrl(payload: unknown, result: unknown): string | undefined {
+  if (typeof result === "string" && /^https?:\/\//i.test(result.trim())) return result.trim();
+  return extractAudioUrl(payload) ?? extractAudioUrl(result);
+}
+
+export async function cloneVoiceTts(
+  ctx: ToolContext,
+  input: CloneVoiceTtsInput,
+): Promise<Record<string, unknown>> {
+  const rawJobId = input.job_id?.trim();
+  const rawText = input.text?.trim();
+  if (!rawJobId && !rawText) {
+    throw new ToolError("Provide `text` to start a job, or `job_id` to poll an existing job.", "invalid_arguments");
+  }
+  if (rawJobId && rawText) {
+    throw new ToolError("Provide exactly one of `text` (start) or `job_id` (poll).", "invalid_arguments");
+  }
+
+  // Authorization gate BEFORE charge/bearer work for start calls.
+  if (!rawJobId) {
+    if (input.authorization_confirmed !== true) {
+      throw new ToolError(
+        "clone_voice_tts requires authorization_confirmed=true. " + VOICE_CLONE_NOTICE,
+        "authorization_required",
+      );
+    }
+    if (!input.clone_audio_url?.trim()) {
+      throw new ToolError(
+        "`clone_audio_url` is required to start a voice-clone job.",
+        "invalid_arguments",
+      );
+    }
+  }
+
+  requireUpstreamBearer(ctx);
+  const idempotencyKey = resolveIdempotencyKey(input.idempotency_key);
+  const billed = await billTool(ctx, "clone_voice_tts", idempotencyKey);
+  const auditId = newAuditId();
+
+  try {
+    let taskId = rawJobId ? validateJobId(rawJobId) : undefined;
+    let created = false;
+
+    if (!taskId) {
+      const cloneAudio = validateHttpUrl(input.clone_audio_url!, "clone_audio_url", MAX_AUDIO_URL_CHARS);
+      const body: Record<string, unknown> = {
+        text: rawText,
+        refer_audio: cloneAudio,
+        from_app: FROM_APP,
+        response_format: "mp3",
+      };
+      const cloneText = input.clone_audio_text?.trim();
+      if (cloneText) body.refer_audio_text = cloneText;
+      if (input.language?.trim()) body.language = input.language.trim();
+      if (input.speed !== undefined) body.speed = input.speed;
+
+      const createPayload = await apiPost(ctx.env, qwenTtsCreatePath(ctx.env), body);
+      taskId = extractJobId(createPayload);
+      if (!taskId) {
+        throw new UpstreamError(
+          "Qwen-TTS create did not return a jobId.",
+          undefined,
+          "invalid_upstream_response",
+          { upstream_result: createPayload },
+        );
+      }
+      created = true;
+      const createdState = normalizeAsyncJob(createPayload);
+      if (createdState.state === "failed") {
+        throw new UpstreamError(
+          `Qwen-TTS create failed: ${createdState.remark ?? "unknown error"}`,
+          undefined,
+          "upstream_rejected",
+          { job_id: taskId, status: createdState.status },
+        );
+      }
+    }
+
+    const activeTaskId = taskId;
+    const timeoutMs = waitMsFrom(input.wait_seconds, DEFAULT_WAIT_SECONDS, MAX_WAIT_SECONDS);
+    const polled = await pollJob(
+      async () =>
+        normalizeAsyncJob(
+          await apiPost(ctx.env, qwenTtsResultPath(ctx.env), { jobId: activeTaskId }),
+        ),
+      { timeoutMs, intervalMs: defaultPollInterval(ctx.env) },
+    );
+
+    const final = polled.state;
+    const audioUrl = extractTtsAudioUrl(final.payload, final.result);
+
+    if (final.state === "failed") {
+      auditRecord({
+        event: "clone_voice_tts",
+        audit_id: auditId,
+        outcome: "failed",
+        charge_id: billed.charge.charge_id,
+        job_id: activeTaskId,
+        created,
+      });
+      throw new UpstreamError(
+        `Qwen-TTS clone job failed: ${final.remark ?? "unknown error"}`,
+        undefined,
+        "upstream_rejected",
+        { job_id: activeTaskId, status: final.status },
+      );
+    }
+
+    if (final.state === "done" && audioUrl) {
+      auditRecord({
+        event: "clone_voice_tts",
+        audit_id: auditId,
+        outcome: "ok",
+        charge_id: billed.charge.charge_id,
+        job_id: activeTaskId,
+        created,
+        audio_host: (() => {
+          try {
+            return new URL(audioUrl).hostname;
+          } catch {
+            return undefined;
+          }
+        })(),
+      });
+      return {
+        ok: true,
+        tool: "clone_voice_tts",
+        audit_id: auditId,
+        status: "done",
+        job_id: activeTaskId,
+        audio_url: audioUrl,
+        created,
+        timed_out: false,
+        idempotency_key: idempotencyKey,
+        charge: billed.charge,
+        copyright_notice: COPYRIGHT_NOTICE,
+        voice_clone_notice: VOICE_CLONE_NOTICE,
+        note: "Cloned-voice output has a limited TTL. Unauthorized voice cloning is prohibited.",
+      };
+    }
+
+    if (final.state === "done" && !audioUrl) {
+      throw new UpstreamError(
+        "Qwen-TTS reported done but returned no audio URL.",
+        undefined,
+        "invalid_upstream_response",
+        { job_id: activeTaskId, status: final.status },
+      );
+    }
+
+    auditRecord({
+      event: "clone_voice_tts",
+      audit_id: auditId,
+      outcome: "pending",
+      charge_id: billed.charge.charge_id,
+      job_id: activeTaskId,
+      created,
+      timed_out: polled.timed_out,
+    });
+
+    return {
+      ok: true,
+      tool: "clone_voice_tts",
+      audit_id: auditId,
+      status: "pending",
+      job_id: activeTaskId,
+      audio_url: null,
+      created,
+      timed_out: polled.timed_out,
+      upstream_status: final.status ?? null,
+      status_str: final.status_str ?? null,
+      idempotency_key: idempotencyKey,
+      charge: billed.charge,
+      copyright_notice: COPYRIGHT_NOTICE,
+      voice_clone_notice: VOICE_CLONE_NOTICE,
+      note: "Job still running. Call again with only `job_id` to poll.",
+    };
+  } catch (error) {
+    auditRecord({
+      event: "clone_voice_tts",
+      audit_id: auditId,
+      outcome: "error",
+      charge_id: billed.charge.charge_id,
+    });
+    raiseAfterCharge(error, billed);
+  }
+}
