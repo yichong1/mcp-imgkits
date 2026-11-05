@@ -1,0 +1,34 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "mcp-doc-translate",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  // Grey release is workers.dev only. Do NOT add a routes/custom_domain block.
+  "workers_dev": true,
+  "upload_source_maps": true,
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "invocation_logs": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    }
+  },
+  "vars": {
+    "ALLOW_DIRECT_MCP": "1",
+    "API_BASE_URL": "https://api.imgkits.com",
+    "MINERU_BASE_PATH": "/api/mineru",
+    "TRANSLATE_TEXT_PATH": "/translate/text",
+    "UPSTREAM_ATTACH_AUTH": "1",
+    "UPSTREAM_TIMEOUT_MS": "30000",
+    "JOB_POLL_INTERVAL_MS": "4000",
+    "COST_PDF_TO_MARKDOWN_THEN_TRANSLATE": "2"
+  }
+  // UPSTREAM_API_TOKEN: wrangler secret put UPSTREAM_API_TOKEN (路B INTERNAL_SERVER_BEARER)
+  // Translate /translate/text is public — do NOT put a translate secret.
+}
