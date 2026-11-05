@@ -1,0 +1,5 @@
+# Optional. Set only when mcp-credit-gateway also sends X-Gateway-Shared-Secret.
+# Public image upstreams do not use a Bearer token.
+# Do not put a frontend key, UPSTREAM_API_TOKEN, or any real secret in git.
+#
+# GATEWAY_SHARED_SECRET=replace-me

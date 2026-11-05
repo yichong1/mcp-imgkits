@@ -1,0 +1,13 @@
+*.log
+.DS_Store
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+.wrangler/
+BRIEF.md
+PI-*.md
+coverage/
+deploy.log
+dist/
+evidence/
+node_modules/
