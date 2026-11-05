@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import { toolErrorResult } from "../src/errors";
+import { resetRemoveWatermarkRateLimits } from "../src/rate-limit";
 import { addWatermark, addWatermarkInputSchema } from "../src/tools/add-watermark";
 import { decodeBlindWatermark, decodeBlindWatermarkInputSchema } from "../src/tools/decode-blind-watermark";
 import { embedBlindWatermark, embedBlindWatermarkInputSchema } from "../src/tools/embed-blind-watermark";
@@ -145,11 +147,19 @@ describe("add_watermark", () => {
 });
 
 describe("remove_watermark", () => {
+  beforeEach(() => {
+    resetRemoveWatermarkRateLimits();
+  });
+
   it("sends img + mask + bucket and always returns the copyright gate", async () => {
     const mask = "https://cdn.imgkits.com/mask.png";
     const { calls } = mockFetch(() => okData({ url: RESULT_IMAGE }));
 
-    const input = removeWatermarkInputSchema.parse({ source_url: SOURCE_IMAGE, mask_image_url: mask });
+    const input = removeWatermarkInputSchema.parse({
+      source_url: SOURCE_IMAGE,
+      mask_image_url: mask,
+      confirm_authorization: true,
+    });
     const result = await removeWatermark(testCtx, input);
 
     expect(result).toMatchObject({
@@ -172,6 +182,7 @@ describe("remove_watermark", () => {
       source_url: SOURCE_IMAGE,
       mask_rect: { x: 0.1, y: 0.2, width: 0.3, height: 0.25 },
       bucket: "custom-bucket",
+      confirm_authorization: true,
     });
     const rectResult = await removeWatermark(testCtx, rectInput);
 
@@ -183,7 +194,10 @@ describe("remove_watermark", () => {
     });
 
     const second = mockFetch(() => okData({ url: RESULT_IMAGE }));
-    const autoInput = removeWatermarkInputSchema.parse({ source_url: SOURCE_IMAGE });
+    const autoInput = removeWatermarkInputSchema.parse({
+      source_url: SOURCE_IMAGE,
+      confirm_authorization: true,
+    });
     const autoResult = await removeWatermark(testCtx, autoInput);
 
     expect(autoResult).toMatchObject({ mask_mode: "auto" });
@@ -210,6 +224,103 @@ describe("remove_watermark", () => {
       }),
     ).toThrow();
 
+    expect(calls).toHaveLength(0);
+  });
+
+  it("rejects a missing or false authorization confirmation without calling upstream", async () => {
+    const { calls } = mockFetch(() => okData({ url: RESULT_IMAGE }));
+
+    const omitted = removeWatermarkInputSchema.parse({ source_url: SOURCE_IMAGE });
+    expect(omitted.confirm_authorization).toBe(false);
+    await expect(removeWatermark(testCtx, omitted)).rejects.toMatchObject({
+      code: "authorization_required",
+      details: { copyright: expect.stringMatching(/only on images you own/i) },
+    });
+
+    const explicit = removeWatermarkInputSchema.parse({
+      source_url: SOURCE_IMAGE,
+      confirm_authorization: false,
+    });
+    await expect(removeWatermark(testCtx, explicit)).rejects.toMatchObject({ code: "authorization_required" });
+    expect(calls).toHaveLength(0);
+    expect(JSON.stringify(explicit)).not.toContain(testCtx.authToken);
+  });
+
+  it("does not let unconfirmed calls consume the caller rate limit", async () => {
+    const { calls } = mockFetch(() => okData({ url: RESULT_IMAGE }));
+    const ctx = {
+      ...testCtx,
+      env: { ...testEnv, REMOVE_WATERMARK_RATE_LIMIT: "1" },
+    };
+    const denied = removeWatermarkInputSchema.parse({ source_url: SOURCE_IMAGE, confirm_authorization: false });
+    await expect(removeWatermark(ctx, denied)).rejects.toMatchObject({ code: "authorization_required" });
+    await expect(removeWatermark(ctx, denied)).rejects.toMatchObject({ code: "authorization_required" });
+
+    const allowed = removeWatermarkInputSchema.parse({ source_url: SOURCE_IMAGE, confirm_authorization: true });
+    const result = await removeWatermark(ctx, allowed);
+    expect(result.copyright).toMatch(/only on images you own/i);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("returns 429 once a caller key exceeds the sliding window and keeps copyright", async () => {
+    const { calls } = mockFetch(() => okData({ url: RESULT_IMAGE }));
+    const ctx = {
+      ...testCtx,
+      env: { ...testEnv, REMOVE_WATERMARK_RATE_LIMIT: "2", REMOVE_WATERMARK_RATE_WINDOW_MS: "60000" },
+    };
+    const input = removeWatermarkInputSchema.parse({ source_url: SOURCE_IMAGE, confirm_authorization: true });
+
+    await removeWatermark(ctx, input);
+    await removeWatermark(ctx, input);
+    let thrown: unknown;
+    try {
+      await removeWatermark(ctx, input);
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toMatchObject({
+      code: "rate_limited",
+      status: 429,
+      details: {
+        copyright: expect.stringMatching(/only on images you own/i),
+        limit: 2,
+        window_ms: 60_000,
+      },
+    });
+    expect(calls).toHaveLength(2);
+    const mcpError = toolErrorResult(thrown);
+    const structured = mcpError.structuredContent as {
+      error: { code: string; status: number; message: string; details: { copyright: string } };
+    };
+    expect(mcpError.isError).toBe(true);
+    expect(structured.error).toMatchObject({ code: "rate_limited", status: 429 });
+    expect(structured.error.details.copyright).toMatch(/only on images you own/i);
+    const payload = JSON.stringify(mcpError);
+    expect(payload).not.toContain(testCtx.authToken);
+    expect(payload).not.toContain("test-upstream-token");
+    expect(payload).not.toMatch(/authorization/i);
+  });
+
+  it("rate-limits each caller key separately", async () => {
+    const { calls } = mockFetch(() => okData({ url: RESULT_IMAGE }));
+    const env = { ...testEnv, REMOVE_WATERMARK_RATE_LIMIT: "1" };
+    const input = removeWatermarkInputSchema.parse({ source_url: SOURCE_IMAGE, confirm_authorization: true });
+    const first = { ...testCtx, authToken: "sk_live_caller_a", env };
+    const second = { ...testCtx, authToken: "sk_live_caller_b", env };
+
+    await removeWatermark(first, input);
+    await removeWatermark(second, input);
+    await expect(removeWatermark(first, input)).rejects.toMatchObject({ code: "rate_limited", status: 429 });
+    expect(calls).toHaveLength(2);
+    expect(JSON.stringify(calls)).not.toContain("sk_live_caller_a");
+  });
+
+  it("rejects a missing UPSTREAM_API_TOKEN before any upstream call", async () => {
+    const { calls } = mockFetch(() => okData({ url: RESULT_IMAGE }));
+    const ctx = { ...testCtx, env: { ...testEnv, UPSTREAM_API_TOKEN: "  " } };
+    const input = removeWatermarkInputSchema.parse({ source_url: SOURCE_IMAGE, confirm_authorization: true });
+    await expect(removeWatermark(ctx, input)).rejects.toMatchObject({ code: "upstream_not_configured" });
     expect(calls).toHaveLength(0);
   });
 });

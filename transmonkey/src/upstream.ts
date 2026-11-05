@@ -8,7 +8,7 @@ import {
   upstreamTimeoutMs,
 } from "./config";
 import type { Env } from "./env";
-import { errorMessage, UpstreamError } from "./errors";
+import { errorMessage, mapUpstreamHttpStatus, redactSecrets, UpstreamError } from "./errors";
 
 export type JsonRecord = Record<string, unknown>;
 
@@ -55,7 +55,7 @@ function upstreamRemark(payload: unknown): string | undefined {
   if (!record) return undefined;
   for (const key of ["remark", "message", "msg", "error"]) {
     const value = record[key];
-    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "string" && value.trim()) return redactSecrets(value.trim());
   }
   return undefined;
 }
@@ -448,7 +448,7 @@ export async function postUpstream(env: Env, baseUrl: string, path: string, body
     });
   } catch (error) {
     throw new UpstreamError(
-      `Translation upstream request failed (${errorMessage(error)}).`,
+      `Translation upstream request failed (${redactSecrets(errorMessage(error), [token])}).`,
       undefined,
       "upstream_unreachable",
     );
@@ -463,6 +463,11 @@ export async function postUpstream(env: Env, baseUrl: string, path: string, body
   }
 
   const text = await response.text().catch(() => "");
+  if (!response.ok) {
+    // Ignore the body. Error pages and auth failures sometimes echo credentials.
+    throw mapUpstreamHttpStatus(response.status, "Translation upstream");
+  }
+
   let payload: unknown;
   try {
     payload = text.trim() ? JSON.parse(text) : undefined;
@@ -473,14 +478,6 @@ export async function postUpstream(env: Env, baseUrl: string, path: string, body
       "invalid_upstream_response",
     );
   }
-
-  if (!response.ok) {
-    throw new UpstreamError(
-      `Translation upstream returned HTTP ${response.status}: ${upstreamRemark(payload) ?? "unknown error"}.`,
-      response.status,
-      "upstream_http_error",
-    );
-  }
   if (payload === undefined) {
     throw new UpstreamError(
       "Translation upstream returned an empty body.",
@@ -489,7 +486,14 @@ export async function postUpstream(env: Env, baseUrl: string, path: string, body
     );
   }
 
-  return unwrapUpstream(payload);
+  try {
+    return unwrapUpstream(payload);
+  } catch (error) {
+    if (error instanceof UpstreamError) {
+      throw new UpstreamError(redactSecrets(error.message, [token]), error.status, error.code, error.details);
+    }
+    throw error;
+  }
 }
 
 /** Translate one or more strings, splitting long inputs into <=1,900 chars. */

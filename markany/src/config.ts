@@ -143,3 +143,19 @@ export function jobPollIntervalMs(env: Env): number {
 export function directMcpAllowed(env: Env): boolean {
   return env.ALLOW_DIRECT_MCP?.trim() === "1";
 }
+
+/**
+ * Per caller-key sliding window for `remove_watermark`. In-memory on each
+ * isolate; the gateway may apply its own limit as well. Defaults are a few
+ * calls per minute so a single key cannot bulk-strip watermarks.
+ */
+export const DEFAULT_REMOVE_WATERMARK_RATE_LIMIT = 5;
+export const DEFAULT_REMOVE_WATERMARK_RATE_WINDOW_MS = 60_000;
+
+export function removeWatermarkRateLimit(env: Env): number {
+  return Math.max(1, positiveInt(env.REMOVE_WATERMARK_RATE_LIMIT, DEFAULT_REMOVE_WATERMARK_RATE_LIMIT));
+}
+
+export function removeWatermarkRateWindowMs(env: Env): number {
+  return Math.max(1_000, positiveInt(env.REMOVE_WATERMARK_RATE_WINDOW_MS, DEFAULT_REMOVE_WATERMARK_RATE_WINDOW_MS));
+}

@@ -65,6 +65,25 @@ describe("translateText", () => {
     );
     expect(calls).toHaveLength(0);
   });
+
+  it("maps an upstream 401 to a stable tool error without leaking the token", async () => {
+    mockFetch(() => jsonResponse({ message: "Authorization: Bearer test-upstream-token" }, 401));
+    let thrown: unknown;
+    try {
+      await translateText({ ...testCtx, chargeId: "ch_gw_text" }, { text: "Hello", from: "en", to: "zh" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({
+      code: "upstream_unauthorized",
+      status: 401,
+      details: { charge_id: "ch_gw_text" },
+    });
+    const blob = JSON.stringify(thrown);
+    expect(blob).not.toContain("test-upstream-token");
+    expect(blob).not.toMatch(/authorization/i);
+    expect(blob).not.toMatch(/bearer/i);
+  });
 });
 
 describe("translateDocument", () => {

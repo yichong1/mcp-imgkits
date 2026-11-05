@@ -19,8 +19,10 @@ MarkAny 水印能力的独立 Cloudflare Worker + 真 MCP Server（Streamable HT
 >
 > - 调用方必须对源图片拥有版权，或已取得权利人的明确编辑授权。
 > - 禁止把本工具用于移除第三方图片的版权水印、图库水印、作者署名或 license 标识，禁止批量、自动化地剥离他人水印。
-> - 本工具每次只接受**一张**图片；调用经 `mcp-credit-gateway` 计量与限频，必须持有效 `sk_live_…` key。
-> - 每次调用（含失败）都会生成 `audit_id` 并写入 Worker 结构化日志；滥用可追溯、可审计。
+> - **可执行硬闸**：参数 `confirm_authorization` 默认为 `false`。未显式传 `true` 时 Worker 直接拒绝，**不请求上游**。
+> - **按调用方密钥限频**：确认后的调用按 `sk_live_…` 的哈希做滑动窗口，默认 **5 次 / 60 秒**。超限返回工具错误 `rate_limited`，`status` 为 **429**。窗口在单个 Worker isolate 内存中，不落库、不记录原始 key；gateway 侧限频仍然有效。
+> - 本工具每次只接受**一张**图片；调用经 `mcp-credit-gateway` 计量，必须持有效 `sk_live_…` key。
+> - 每次调用（含拒绝与失败）都会生成 `audit_id` 并写入 Worker 结构化日志；成功结果与拒绝错误都带 `copyright` 字段。滥用可追溯、可审计。
 > - 上游/平台可按风控策略拒绝、封禁或上报违规调用。
 
 ## 架构（gateway 扣分 + 转发）
@@ -144,6 +146,7 @@ Worker → 上游请求体（`ADD_WATERMARK_PATH` 可被 env 覆盖）：
 | `mask_image_url` | 否 | 公网 mask 图；白色/不透明 = 要移除的区域，黑色/透明 = 保留 |
 | `mask_rect` | 否 | 归一化矩形 `{x,y,width,height}`，取值 0–1，且 `x+width<=1`、`y+height<=1`；与 `mask_image_url` 互斥 |
 | `bucket` | 否 | 上游存储 bucket，默认 `imgkits`（`INPAINT_BUCKET` 可覆盖） |
+| `confirm_authorization` | 是（必须为 `true`） | 显式确认自有或已获授权。默认 `false`；省略或 `false` 返回 `authorization_required`，不打上游 |
 | `idempotency_key` | 否 | 调用方关联键，原样回显 |
 
 上游 `POST {AI_BASE_URL}/api/inpaint`（AiController::actionEraseperson 同款）：
@@ -155,8 +158,9 @@ Worker → 上游请求体（`ADD_WATERMARK_PATH` 可被 env 覆盖）：
 - 传 `mask_image_url`：原样作为 `mask` 发送。
 - 只传 `mask_rect`：Worker 发 `{"img","bucket","mask_rect":{…}}`。**注意**：`/api/inpaint` 传统上要求 bitmap mask；若上游不支持 `mask_rect`，请改传 `mask_image_url`。README 明确此差异，不假装已确认。
 - 两者都不传：走上游自动检测/自动去水印模式（是否支持取决于上游）。
-- 一次调用只处理一张图；`mcp-credit-gateway` 负责限频/计量。每次调用返回 `audit_id`，成功与失败都会写结构化日志，便于审计。
-- 结果里同时返回 `copyright` 声明；该声明也出现在 MCP tool description 和本 README。
+- 一次调用只处理一张图。通过授权确认后，本 Worker 再按调用方密钥限频（默认 5 次 / 60 秒，可用下面的 vars 覆盖，**不是定价**）。超限不打上游。
+- 每次调用返回 `audit_id`，成功、拒绝与失败都会写结构化日志，便于审计。日志不含 key、token 或完整 URL。
+- 成功结果的 `copyright` 字段保持不变；授权拒绝和限频拒绝的 `error.details.copyright` 也带同一段声明。该声明也出现在 MCP tool description 和本 README。
 
 ### 3) `embed_blind_watermark`
 
@@ -251,7 +255,9 @@ GET  {AI_BASE_URL}/index.php?r=ai/get-decode-blind-watermark&taskId=…
 | `INPAINT_BUCKET` | `imgkits` | inpaint 结果 bucket |
 | `UPSTREAM_TIMEOUT_MS` | `30000` | 单次上游请求超时 |
 | `JOB_POLL_INTERVAL_MS` | `2000` | 解析任务轮询间隔（最小 200） |
-| `COST_*` | 见上表 | 各工具默认积分 |
+| `COST_*` | 见上表 | 各工具默认积分。本批不改任何定价数字 |
+| `REMOVE_WATERMARK_RATE_LIMIT` | `5` | 可选。每个调用方密钥在窗口内允许的已确认 `remove_watermark` 次数。代码默认 5；小于 1 时按 1 |
+| `REMOVE_WATERMARK_RATE_WINDOW_MS` | `60000` | 可选。滑动窗口毫秒数。代码默认 60000；小于 1000 时按 1000 |
 
 所有上游请求都会带 `Authorization: Bearer ${UPSTREAM_API_TOKEN}`（即使上游暂未校验，也保留头以便新签后启用）。
 
@@ -289,9 +295,10 @@ npm run dev
 测试覆盖：
 
 - `test/charge.test.ts`：本地 trust 助手、cost 元数据、`charge_id` 透传、0 cost、非法 cost。
-- `test/upstream.test.ts`：两种上游信封、结果 URL/taskId 提取、盲水印状态归一化、轮询超时、`withQuery`、Bearer/`channel: ai` 头。
+- `test/upstream.test.ts`：两种上游信封、结果 URL/taskId 提取、盲水印状态归一化、轮询超时、`withQuery`、Bearer/`channel: ai` 头、401/403/404/429/5xx 映射且不回传 token。
 - `test/urls.test.ts`：公网 URL 预检（私网/保留 IP、metadata、数字主机、带凭据 URL）。
-- `test/watermark-tools.test.ts`：4 个工具的参数校验、上游 body/schema、`ADD_WATERMARK_PATH` 覆盖、mask 三种模式、服务端盲水印钥不回显、异步 job 轮询、失败审计/charge 包装、**全程无 `/v1/charge`**。
+- `test/watermark-tools.test.ts`：4 个工具的参数校验、上游 body/schema、`ADD_WATERMARK_PATH` 覆盖、mask 三种模式、服务端盲水印钥不回显、异步 job 轮询、失败审计/charge 包装、`confirm_authorization` 未确认拒绝、按密钥 429 限频、缺 token 不打上游、**全程无 `/v1/charge`**。
+- `test/rate-limit.test.ts`：默认 5 次/60 秒、窗口过期、调用方 key 只存哈希。
 - `test/worker.test.ts`：health、公开 `initialize`/`tools/list`/`ping`、`tools/call` Bearer/前缀校验、batch 混合方法鉴权、gateway channel、`ALLOW_DIRECT_MCP` 开关、shared secret、CORS preflight、404。
 - `test/mcp-smoke.test.ts`：无 Bearer 的 `initialize` / `tools/list` 应 200，无 Bearer 的 `tools/call` 应 401；真实 MCP `initialize` → `tools/list`（4 个工具）→ `tools/call add_watermark`。
 
@@ -442,7 +449,7 @@ curl -sS -N -X POST "$BASE/mcp" \
   -H "content-type: application/json" \
   -H "accept: application/json, text/event-stream" \
   -H "mcp-protocol-version: 2025-06-18" \
-  -d '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"remove_watermark","arguments":{"source_url":"https://assets.imgkits.com/demo/own-image.png","mask_rect":{"x":0.6,"y":0.8,"width":0.3,"height":0.15}}}}'
+  -d '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"remove_watermark","arguments":{"source_url":"https://assets.imgkits.com/demo/own-image.png","confirm_authorization":true,"mask_rect":{"x":0.6,"y":0.8,"width":0.3,"height":0.15}}}}'
 ```
 
 响应可能是 SSE（`event: message` + `data: {...}`），这是正常现象。
@@ -467,11 +474,15 @@ curl -sS -N -X POST "$BASE/mcp" \
 | code | 含义 |
 |---|---|
 | `invalid_arguments` / `invalid_url` / `blocked_url` / `invalid_page_range` / `invalid_job_id` / `text_too_long` | 参数校验失败，未请求上游 |
+| `authorization_required` | `remove_watermark` 未把 `confirm_authorization` 设为 `true`。不打上游，`details.copyright` 仍在 |
+| `rate_limited`（`status: 429`） | 该调用方密钥在滑动窗口内超过默认 5 次/60 秒。不打上游 |
 | `watermark_content_missing` / `server_key_invalid` | 盲水印内容缺失或 `BLIND_WATERMARK_KEY` 非法 |
-| `upstream_not_configured` | Worker 未设置 `UPSTREAM_API_TOKEN` |
-| `tool_failed_after_charge` | gateway 已扣（charged>0）但工具/上游失败；错误里带 `charge_id`，人工对账 |
+| `upstream_not_configured` | Worker 未设置 `UPSTREAM_API_TOKEN`。不打上游 |
+| `tool_failed_after_charge` | gateway 已扣（charged>0）但工具/上游业务失败；错误里带 `charge_id`，人工对账 |
 | `upstream_job_failed` | 异步解析任务失败；若已扣分，错误里带 charge 信息与 `audit_id` |
-| `upstream_rejected` / `invalid_upstream_response` / `upstream_unavailable` / `upstream_http_error` | 上游错误 |
+| `upstream_unauthorized` / `upstream_forbidden` / `upstream_not_found` / `upstream_rate_limited` | 上游 HTTP 401 / 403 / 404 / 429。消息是固定文案，不回传响应体 |
+| `upstream_unavailable` | 上游 HTTP 5xx |
+| `upstream_rejected` / `invalid_upstream_response` / `upstream_http_error` | 其它上游错误。业务拒绝文案会去掉 Bearer / token |
 | `unauthorized` | `tools/call` 等需鉴权方法的 Bearer 缺失/前缀错、shared secret 不匹配，或未走 gateway 且直连被禁用 |
 
 余额不足（402）、gateway 限流（429）、gateway 不可用（503）由 **gateway 在转发前**返回，不会进入本 Worker 的工具错误。
@@ -485,7 +496,8 @@ src/
   config.ts                        AI 基址/路径、限制、默认积分、版权声明、ALLOW_DIRECT_MCP
   env.ts                           Env / ToolContext 类型（authToken/chargeId/accessChannel/blind key）
   charge.ts                        本地“信任 gateway 已扣”助手（零网络，无 /v1/charge）
-  upstream.ts                      上游 HTTP、两种信封解包、盲水印状态归一化、job 轮询
+  upstream.ts                      上游 HTTP、两种信封解包、盲水印状态归一化、job 轮询、HTTP 错误映射
+  rate-limit.ts                    remove_watermark 按调用方密钥的滑动窗口（默认 5 次/60 秒）
   urls.ts                          上游请求前的公网 URL 预检（挡私网/本地/metadata）
   errors.ts                        ToolError / ChargeError / UpstreamError / MCP result
   tools/
@@ -510,7 +522,7 @@ wrangler.jsonc                     workers_dev only，无 routes
 - **不存调用方 key**：不写日志、不落 D1/KV；只在请求生命周期内传给工具上下文。
 - **workers.dev only**：`wrangler.jsonc` 没有 `routes` / `custom_domain`。
 - **SSRF 收敛**：Worker 不下载用户图片/PDF；只把 URL 交给上游。`source_url` / `watermark_image_url` / `mask_image_url` 在请求上游前会拒绝 localhost、私网/保留 IP、metadata 主机、非 http(s) 和带凭据的 URL；上游仍需自己做 egress 控制。
-- **去水印版权硬闸**：tool description、README、每次 `remove_watermark` 结果的 `copyright` 字段都包含“仅自有/已授权素材、禁止批量剥离他人版权水印、限频、失败可审计”声明。
+- **去水印版权硬闸**：`confirm_authorization` 默认 false，未确认直接拒；每个调用方密钥滑动窗口默认 5 次/60 秒，超限 `rate_limited` / 429；tool description、README、成功结果的 `copyright` 以及拒绝错误的 `details.copyright` 都包含“仅自有/已授权素材、禁止批量剥离他人版权水印、限频、失败可审计”声明。
 - **审计**：每次工具调用生成 `audit_id`；`remove_watermark` 成功/失败均写结构化日志（tool、audit_id、charge_id、source host、mask mode、outcome），不记录 key、水印内容或完整 URL。
 - **盲水印内容不回显**：`embed_blind_watermark` 只返回 `watermark_source` / `watermark_chars`，不返回 `watermark_text` 或 `BLIND_WATERMARK_KEY`。
 - **大小写进工具描述**：图片/PDF/水印图上限、正文长度、等待秒数都写在 MCP tool description 里。
@@ -519,6 +531,6 @@ wrangler.jsonc                     workers_dev only，无 routes
 
 - 已从 `mcp-transmonkey` 翻译模板改写为 `mcp-markany`：删除翻译/字幕/语种检测代码，保留挂载 A 与公开 `initialize` / `tools/list` / `ping` 鉴权模式。
 - 4 个工具、成本元数据、版权硬闸、workers.dev 部署说明、隐私链 `https://mcp.imgkits.com` 均已落地。
-- `npm ci && npm run check` 全绿（typecheck + 63 tests）。
+- `npm test` 全绿（80 tests）。定价数字与上游 path 未改。
 - **尚未部署、未 git commit**：部署由负责人执行；本环境不执行 `wrangler deploy`。
 - `ADD_WATERMARK_PATH` 仍为文档化占位 `/api/watermark`，需按实际上游确认后覆盖。

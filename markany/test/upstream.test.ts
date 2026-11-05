@@ -6,6 +6,7 @@ import {
   extractTaskId,
   normalizeBlindWatermarkResult,
   pollJob,
+  postUpstream,
   unwrapUpstream,
   withQuery,
 } from "../src/upstream";
@@ -140,5 +141,53 @@ describe("upstream HTTP", () => {
       code: "upstream_not_configured",
     });
     expect(calls).toHaveLength(0);
+  });
+
+  it.each([
+    [401, "upstream_unauthorized"],
+    [403, "upstream_forbidden"],
+    [404, "upstream_not_found"],
+    [429, "upstream_rate_limited"],
+    [500, "upstream_unavailable"],
+    [503, "upstream_unavailable"],
+    [418, "upstream_http_error"],
+  ] as const)("maps HTTP %s to %s and drops credential material", async (status, code) => {
+    const { calls } = mockFetch(() =>
+      jsonResponse({ message: "Authorization: Bearer test-upstream-token", token: "test-upstream-token" }, status),
+    );
+    let thrown: unknown;
+    try {
+      await aiPost(testEnv, "/api/inpaint", { img: "https://assets.example.net/a.png" });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code, status });
+    const blob = JSON.stringify(thrown);
+    expect(blob).not.toContain("test-upstream-token");
+    expect(blob).not.toMatch(/authorization/i);
+    expect(blob).not.toMatch(/bearer/i);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("maps a blind-poll HTTP 403 without echoing the token", async () => {
+    mockFetch(() => jsonResponse("Bearer test-upstream-token", 403));
+    await expect(
+      aiGet(testEnv, "/index.php?r=ai/get-decode-blind-watermark&taskId=task-1"),
+    ).rejects.toMatchObject({
+      code: "upstream_forbidden",
+      status: 403,
+    });
+  });
+
+  it("redacts a token echoed in a business-rejection remark", async () => {
+    mockFetch(() => jsonResponse({ success: false, message: "bad Authorization: Bearer test-upstream-token" }));
+    let thrown: unknown;
+    try {
+      await postUpstream(testEnv, "https://ai.test", "/api/inpaint", {});
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toMatchObject({ code: "upstream_rejected" });
+    expect(JSON.stringify(thrown)).not.toContain("test-upstream-token");
   });
 });

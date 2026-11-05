@@ -4,33 +4,76 @@ import type { CallToolResult } from "@modelcontextprotocol/server";
 export class ToolError extends Error {
   readonly code: string;
   readonly details?: unknown;
+  readonly status?: number;
 
-  constructor(message: string, code = "tool_error", details?: unknown) {
+  constructor(message: string, code = "tool_error", details?: unknown, status?: number) {
     super(message);
     this.name = "ToolError";
     this.code = code;
     this.details = details;
+    this.status = status;
   }
 }
 
 export class ChargeError extends ToolError {
-  readonly status?: number;
-
   constructor(message: string, status?: number, code = "charge_failed", details?: unknown) {
-    super(message, code, details);
+    super(message, code, details, status);
     this.name = "ChargeError";
-    this.status = status;
   }
 }
 
 export class UpstreamError extends ToolError {
-  readonly status?: number;
-
   constructor(message: string, status?: number, code = "upstream_error", details?: unknown) {
-    super(message, code, details);
+    super(message, code, details, status);
     this.name = "UpstreamError";
-    this.status = status;
   }
+}
+
+/** HTTP statuses that must surface as stable tool codes, never as raw upstream bodies. */
+const STABLE_UPSTREAM_HTTP_CODES = new Set([
+  "upstream_unauthorized",
+  "upstream_forbidden",
+  "upstream_not_found",
+  "upstream_rate_limited",
+  "upstream_unavailable",
+  "upstream_http_error",
+]);
+
+/**
+ * Map an upstream HTTP status onto a stable tool error.
+ * The message is fixed and does not include the response body, so Authorization
+ * headers and tokens cannot leak through a remark or error payload.
+ */
+export function mapUpstreamHttpStatus(status: number, subject: string): UpstreamError {
+  if (status === 401) {
+    return new UpstreamError(`${subject} rejected the credentials (HTTP 401).`, 401, "upstream_unauthorized");
+  }
+  if (status === 403) {
+    return new UpstreamError(`${subject} refused the request (HTTP 403).`, 403, "upstream_forbidden");
+  }
+  if (status === 404) {
+    return new UpstreamError(`${subject} path was not found (HTTP 404).`, 404, "upstream_not_found");
+  }
+  if (status === 429) {
+    return new UpstreamError(`${subject} rate limited the request (HTTP 429).`, 429, "upstream_rate_limited");
+  }
+  if (status >= 500 && status <= 599) {
+    return new UpstreamError(`${subject} is unavailable (HTTP ${status}).`, status, "upstream_unavailable");
+  }
+  return new UpstreamError(`${subject} returned HTTP ${status}.`, status, "upstream_http_error");
+}
+
+/** Strip bearer tokens and caller-supplied secrets from a string that might be returned to a client. */
+export function redactSecrets(text: string, secrets: Array<string | undefined> = []): string {
+  let out = text;
+  for (const secret of secrets) {
+    const value = secret?.trim();
+    if (!value || value.length < 4) continue;
+    out = out.split(value).join("[redacted]");
+  }
+  return out
+    .replace(/bearer\s+[^\s,;]+/gi, "Bearer [redacted]")
+    .replace(/authorization\s*[:=]\s*[^\s,;]+/gi, "authorization [redacted]");
 }
 
 export function errorMessage(error: unknown): string {
@@ -50,11 +93,33 @@ function errorPayload(error: unknown): Record<string, unknown> {
       error: {
         code: error.code,
         message: error.message,
+        ...(error.status === undefined ? {} : { status: error.status }),
         ...(error.details === undefined ? {} : { details: error.details }),
       },
     };
   }
-  return { ok: false, error: { code: "internal_error", message: errorMessage(error) } };
+  return { ok: false, error: { code: "internal_error", message: redactSecrets(errorMessage(error)) } };
+}
+
+/**
+ * Keep stable upstream HTTP codes visible to the MCP caller after a gateway
+ * charge, and still attach the charge id for reconciliation.
+ */
+export function rethrowWithCharge(error: unknown, chargeId: string): never {
+  if (error instanceof ToolError && STABLE_UPSTREAM_HTTP_CODES.has(error.code)) {
+    const prior =
+      error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
+        ? (error.details as Record<string, unknown>)
+        : {};
+    throw new ToolError(
+      `${error.message} The credit charge already succeeded (charge_id=${chargeId}); ` +
+        "there is no automatic refund API. Contact support with this charge_id.",
+      error.code,
+      { ...prior, charge_id: chargeId },
+      error.status,
+    );
+  }
+  throw withChargeContext(error, chargeId);
 }
 
 /** A successful MCP result: pretty JSON text plus structuredContent. */
