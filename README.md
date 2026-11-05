@@ -6,6 +6,7 @@ Public monorepo for ImgKits MCP Workers.
 |------|------|
 | [`transmonkey/`](./transmonkey/) | Translation MCP (text / document / image / subtitle + language detect) |
 | [`markany/`](./markany/) | Watermark MCP (add / remove / blind embed & decode) |
+| [`imgkits-core/`](./imgkits-core/) | Core image MCP (colorize, upscale with face enhance, background, cartoon, extend, resize, compress) |
 | [`gateway/`](./gateway/) | Credit gateway (auth, metering, Service Binding aggregation) |
 
 ## Use the MCP
